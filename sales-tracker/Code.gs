@@ -6,12 +6,12 @@
  *  - fills Call time (IST) with the current time if it is empty
  *  - copies "Stage after call" to Leads > Stage
  *  - copies "Next follow-up (IST)" to Leads > Next follow-up (IST)
- *  - copies Notes to Leads > Latest notes
+ *  Latest notes on Leads is never touched; that column is for your own comments.
  */
 const CALLS = 'Calls';
 const LEADS = 'Leads';
-const CALL_COL = { time: 1, restaurant: 2, stage: 5, notes: 6, followUp: 7 };
-const LEAD_COL = { restaurant: 1, stage: 2, followUp: 3, notes: 14 };
+const CALL_COL = { time: 1, restaurant: 2, stage: 5, followUp: 7 };
+const LEAD_COL = { restaurant: 1, stage: 2, followUp: 3 };
 
 function onEdit(e) {
   const sheet = e.range.getSheet();
@@ -45,8 +45,6 @@ function syncCallRow_(calls, row) {
 
   const stage = values[CALL_COL.stage - 1];
   const followUp = values[CALL_COL.followUp - 1];
-  const notes = values[CALL_COL.notes - 1];
   if (stage) leads.getRange(leadRow, LEAD_COL.stage).setValue(stage);
   if (followUp) leads.getRange(leadRow, LEAD_COL.followUp).setValue(followUp);
-  if (notes) leads.getRange(leadRow, LEAD_COL.notes).setValue(notes);
 }
