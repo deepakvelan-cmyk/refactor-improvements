@@ -15,12 +15,14 @@ and by **Shift Audit → Take screenshot now** (re-runs the Controls report firs
 
 | Name | Layout | Files |
 |---|---|---|
-| Full | Web report: KPI tiles, Agent Scorecard with notes, Hourly Call Trend | PNG + PDF |
-| Mobile | Phone scorecard: KPI tiles, scorecard with a notes row under each agent | PNG |
-| Idle | Idle Time & Call Gaps: each gap > 20 min as a chip (red idle, blue tracker updated, orange dialer only) | PNG |
+| Full | Web report: KPI tiles, Agent Scorecard with notes, Hourly Call Trend | JPG + PDF |
+| Mobile | Phone scorecard: KPI tiles, scorecard with a notes row under each agent | JPG |
+| Idle | Idle Time & Call Gaps: each gap > 20 min as a chip (red idle, blue tracker updated, orange dialer only) | JPG |
 
-Each page is HTML sized to its content, converted to PDF by Apps Script; Drive renders the PNG from the PDF.
-If a PNG can't be made, that page's PDF is kept and linked instead.
+Each page is HTML sized to its content, converted to PDF by Apps Script; Drive renders the image from the PDF.
+Drive's PDF images are always 1024 px wide, so Full is laid out exactly 1024 px wide (1:1, no shrinking) and
+Mobile / Idle come out at about 2× / 1.4× their layout size. The PDF is vector and stays sharp at any zoom.
+If an image can't be made, that page's PDF is kept and linked instead.
 
 After updating from the earlier version, run **Shift Audit → Rebuild screenshot list** once: the Screenshots tab
 columns changed (`Mobile — PDF` became `Idle — Image`).

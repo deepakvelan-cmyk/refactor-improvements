@@ -1,10 +1,11 @@
 /**
  * Screenshots — three images built from the run's data (not from the Report tab):
- *   Full   – web / desktop report: KPI tiles, Agent Scorecard with notes, Hourly Call Trend  (PNG + PDF)
- *   Mobile – phone scorecard: KPI tiles, compact scorecard with a notes row under each agent    (PNG)
- *   Idle   – Idle Time & Call Gaps: every gap > GAP_MIN min as a coloured chip per agent       (PNG)
- * Each page is HTML sized to its content, converted to PDF by Apps Script, and Drive renders the PNG
- * from that PDF. The Mobile and Idle PDFs are only kept when the PNG could not be made.
+ *   Full   – web / desktop report: KPI tiles, Agent Scorecard with notes, Hourly Call Trend  (JPG + PDF)
+ *   Mobile – phone scorecard: KPI tiles, compact scorecard with a notes row under each agent    (JPG)
+ *   Idle   – Idle Time & Call Gaps: every gap > GAP_MIN min as a coloured chip per agent       (JPG)
+ * Each page is HTML sized to its content, converted to PDF by Apps Script, and Drive renders the image
+ * from that PDF, always 1024 px wide: Full is laid out 1024 px wide so it is not shrunk, Mobile (500) and
+ * Idle (720) come out sharper than 1:1. The Mobile and Idle PDFs are only kept when the image could not be made.
  */
 
 var SHOT_COLORS = {
@@ -44,9 +45,9 @@ function screenshotReport(kind, md) {
     p.file = month.createFile(renderPdf(p.html, p.w, p.h).setName(stamp + ' · ' + p.name + '.pdf')).setDescription(desc);
   });
   pages.forEach(function (p) {
-    var png = pdfToPng(p.file.getId());
-    if (png) links[p.name + 'Img'] = month.createFile(png.setName(stamp + ' · ' + p.name + '.png')).setDescription(desc).getUrl();
-    if (p.keepPdf || !png) links[p.name + 'Pdf'] = p.file.getUrl();
+    var img = pdfToImage(p.file.getId());
+    if (img) links[p.name + 'Img'] = month.createFile(img.blob.setName(stamp + ' · ' + p.name + '.' + img.ext)).setDescription(desc).getUrl();
+    if (p.keepPdf || !img) links[p.name + 'Pdf'] = p.file.getUrl();
     else p.file.setTrashed(true);
   });
   var sh = screenshotsSheet();
@@ -104,15 +105,15 @@ var SHOT_CSS = [
 
 // ---------- Full (web) ----------
 function shotFull(md) {
-  var T = md.T, rowsH = 0, W = 1240;
+  var T = md.T, rowsH = 0, W = 1024;   // = Drive's preview width, so the image is 1:1
   var head = shotHeader('NIGHT SHIFT REPORT — ' + md.range, md.run) +
     shotSub(md, ' · Idle time & gaps: separate screenshot') +
-    shotTiles(shotKpis(md), 8);
-  var cols = [['Agent', 108], ['Calls', 54], ['Connected', 92], ['On-call min', 72], ['Talk min', 62], ['Tracker', 62],
-              ['Log %', 56], ['Repeat dials', 82], ['Status', 116], ['Notes / Observations', 0]];
+    shotTiles(shotKpis(md), 8, 17);
+  var cols = [['Agent', 96], ['Calls', 44], ['Connected', 80], ['On-call min', 54], ['Talk min', 48], ['Tracker', 54],
+              ['Log %', 46], ['Repeat dials', 58], ['Status', 100], ['Notes / Observations', 0]];
   var rows = md.active.map(function (a, i) {
     var m = md.combined[a], notes = noteTexts(m, md.multi);
-    var lines = notes.reduce(function (s, t) { return s + Math.max(1, Math.ceil(t.length / 66)); }, 0);
+    var lines = notes.reduce(function (s, t) { return s + Math.max(1, Math.ceil(t.length / 58)); }, 0);
     var h = Math.max(44, lines * 17 + 10);
     rowsH += h;
     var flagged = isFlagged(m);
@@ -122,7 +123,7 @@ function shotFull(md) {
       td(fmtDur(m.durSec)) + td(fmtDur(m.talkSec)) + td(m.isTracker ? fmtInt(m.entries) : '–') +
       logCell(m) + repCell(m) +
       '<td style="color:' + statusColor(scoreStatus(a, m, !md.done)) + ';font-weight:bold;font-size:12px">' + esc(scoreStatus(a, m, !md.done)) + '</td>' +
-      '<td class="n"' + (flagged ? ' style="background:' + STYLE.flagBg + '"' : '') + '>' +
+      '<td class="n" style="font-size:12px' + (flagged ? ';background:' + STYLE.flagBg : '') + '">' +
       notes.map(function (t) { return esc(t); }).join('<br>') + '</td></tr>';
   });
   rows.push('<tr class="tot" style="height:30px"><td class="a">TOTAL</td><td>' + fmtInt(T.dialed) + '</td><td>' + fmtInt(T.conn) +
@@ -138,7 +139,7 @@ function shotFull(md) {
 
   // Hourly trend: calls over minutes on call; red = extreme decline.
   var hl = shortHours();
-  var hcols = [['Agent', 108]].concat(hl.map(function (h) { return [h, 0]; })).concat([['Trend', 120], ['Direction', 210]]);
+  var hcols = [['Agent', 96]].concat(hl.map(function (h) { return [h, 0]; })).concat([['Trend', 104], ['Direction', 176]]);
   var hrows = md.active.concat(['TOTAL']).map(function (a, i) {
     var m = a === 'TOTAL' ? T : md.combined[a], tr = hourlyTrend(m);
     var cells = m.hCalls.map(function (c, h) {
@@ -252,13 +253,13 @@ function shotKpis(md) {
           ['Idle &gt; ' + CONFIG.GAP_MIN + ' min', '<span style="color:' + STYLE.red + '">' + T.gapsNoAct + '</span>', true]];
 }
 
-// KPI tiles, perRow per line. Labels / values marked raw (3rd item) are already HTML.
-function shotTiles(kpis, perRow) {
+// KPI tiles, perRow per line, value font size px (default 20). Values marked raw (3rd item) are already HTML.
+function shotTiles(kpis, perRow, size) {
   var out = '<table class="tiles">';
   for (var i = 0; i < kpis.length; i += perRow) {
     out += '<tr>' + kpis.slice(i, i + perRow).map(function (k) {
-      return '<td class="tile" style="width:' + Math.floor(100 / perRow) + '%"><div class="l">' + k[0] + '</div><div class="v">' +
-        (k[2] ? k[1] : esc(k[1])) + '</div></td>';
+      return '<td class="tile" style="width:' + Math.floor(100 / perRow) + '%"><div class="l">' + k[0] + '</div><div class="v"' +
+        (size ? ' style="font-size:' + size + 'px"' : '') + '>' + (k[2] ? k[1] : esc(k[1])) + '</div></td>';
     }).join('') + '</tr>';
   }
   return out + '</table>';

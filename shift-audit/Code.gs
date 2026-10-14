@@ -177,16 +177,24 @@ function childFolder(parent, name) {
   return it.hasNext() ? it.next() : parent.createFolder(name);
 }
 
-// Full-resolution PNG of the PDF page, rendered by Drive (the preview can take a few seconds to appear).
-function pdfToPng(fileId) {
+// Image of the PDF page as rendered by Drive (the preview can take a few seconds to appear).
+// Drive renders PDF previews 1024 px wide; the size is uncapped so tall pages keep that width.
+// Asks for JPEG ('-rj'); returns {blob, ext} with ext 'jpg', or 'png' if Drive sent a PNG instead.
+function pdfToImage(fileId) {
   var auth = {headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken()}, muteHttpExceptions: true};
   for (var i = 0; i < 10; i++) {
     Utilities.sleep(3000);
     var r = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?fields=thumbnailLink', auth);
     var link = r.getResponseCode() === 200 && JSON.parse(r.getContentText()).thumbnailLink;
     if (!link) continue;
-    var img = UrlFetchApp.fetch(link.replace(/=s\d+$/, '=s3200'), auth);
-    if (img.getResponseCode() === 200) return img.getBlob().setContentType('image/png');
+    var base = link.replace(/=[^=\/]*$/, '');
+    var sizes = ['=s16000-rj', '=s3200-rj', '=s3200'];
+    for (var k = 0; k < sizes.length; k++) {
+      var img = UrlFetchApp.fetch(base + sizes[k], auth);
+      if (img.getResponseCode() !== 200) continue;
+      var bytes = img.getContent(), jpg = bytes[0] === -1 && bytes[1] === -40;   // JPEG starts FF D8
+      return {blob: img.getBlob().setContentType(jpg ? 'image/jpeg' : 'image/png'), ext: jpg ? 'jpg' : 'png'};
+    }
   }
   return null;   // the PDF is still saved and linked
 }
@@ -234,10 +242,10 @@ function rebuildScreenshotList() {
     while (months.hasNext()) {
       var mf = months.next(), files = mf.getFiles();
       while (files.hasNext()) {
-        var f = files.next(), m = f.getName().match(/^(.+ IST) · (Full|Mobile|Idle)\.(png|pdf)$/i);
+        var f = files.next(), m = f.getName().match(/^(.+ IST) · (Full|Mobile|Idle)\.(jpe?g|png|pdf)$/i);
         if (!m) continue;
         var s = shots[m[1]] || (shots[m[1]] = {links: {}, folderUrl: mf.getUrl(), folderName: mf.getName()});
-        s.links[m[2] + (m[3].toLowerCase() === 'png' ? 'Img' : 'Pdf')] = f.getUrl();
+        s.links[m[2] + (m[3].toLowerCase() === 'pdf' ? 'Pdf' : 'Img')] = f.getUrl();
         try { s.info = s.info || JSON.parse(f.getDescription() || ''); } catch (e) {}
         if (!s.info) s.info = {taken: f.getDateCreated().getTime()};
       }
