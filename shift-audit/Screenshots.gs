@@ -100,7 +100,15 @@ var SHOT_CSS = [
   '.bars{margin:0 auto;border-collapse:collapse}',
   '.grid .bars td{border:0;padding:0 1px;vertical-align:bottom;height:24px}',
   '.chip{display:inline-block;border:1px solid;border-radius:12px;padding:3px 12px;margin:3px 0;font-size:12.5px;white-space:nowrap}',
-  '.foot{color:' + SHOT_COLORS.muted + ';font-style:italic;font-size:11px;margin-top:8px;line-height:16px}'
+  '.foot{color:' + SHOT_COLORS.muted + ';font-style:italic;font-size:11px;margin-top:8px;line-height:16px}',
+  // Full layout: larger text, since its image cannot be wider than 1024 px.
+  '.fx .grid td{font-size:14.5px}',
+  '.fx .grid th{font-size:13px}',
+  '.fx .s{font-size:12px}',
+  '.fx .sub{font-size:13px}',
+  '.fx .tile .l{font-size:13px}',
+  '.fx h2{font-size:17px}',
+  '.fx .foot{font-size:12px}'
 ].join('');
 
 // ---------- Full (web) ----------
@@ -109,12 +117,12 @@ function shotFull(md) {
   var head = shotHeader('NIGHT SHIFT REPORT — ' + md.range, md.run) +
     shotSub(md, ' · Idle time & gaps: separate screenshot') +
     shotTiles(shotKpis(md), 8, 17);
-  var cols = [['Agent', 96], ['Calls', 44], ['Connected', 80], ['On-call min', 54], ['Talk min', 48], ['Tracker', 54],
-              ['Log %', 46], ['Repeat dials', 58], ['Status', 100], ['Notes / Observations', 0]];
+  var cols = [['Agent', 104], ['Calls', 46], ['Connected', 90], ['On-call min', 56], ['Talk min', 50], ['Tracker', 58],
+              ['Log %', 50], ['Repeat dials', 60], ['Status', 104], ['Notes / Observations', 0]];
   var rows = md.active.map(function (a, i) {
     var m = md.combined[a], notes = noteTexts(m, md.multi);
-    var lines = notes.reduce(function (s, t) { return s + Math.max(1, Math.ceil(t.length / 58)); }, 0);
-    var h = Math.max(44, lines * 17 + 10);
+    var lines = notes.reduce(function (s, t) { return s + Math.max(1, Math.ceil(t.length / 48)); }, 0);
+    var h = Math.max(48, lines * 20 + 12);
     rowsH += h;
     var flagged = isFlagged(m);
     return '<tr class="' + (i % 2 ? 'band' : '') + '" style="height:' + h + 'px">' +
@@ -122,8 +130,8 @@ function shotFull(md) {
       '<td>' + fmtInt(m.conn) + ' <span class="s">(' + pct(m.conn, m.dialed) + ')</span></td>' +
       td(fmtDur(m.durSec)) + td(fmtDur(m.talkSec)) + td(m.isTracker ? fmtInt(m.entries) : '–') +
       logCell(m) + repCell(m) +
-      '<td style="color:' + statusColor(scoreStatus(a, m, !md.done)) + ';font-weight:bold;font-size:12px">' + esc(scoreStatus(a, m, !md.done)) + '</td>' +
-      '<td class="n" style="font-size:12px' + (flagged ? ';background:' + STYLE.flagBg : '') + '">' +
+      '<td style="color:' + statusColor(scoreStatus(a, m, !md.done)) + ';font-weight:bold;font-size:13.5px">' + esc(scoreStatus(a, m, !md.done)) + '</td>' +
+      '<td class="n" style="font-size:14px;line-height:20px' + (flagged ? ';background:' + STYLE.flagBg : '') + '">' +
       notes.map(function (t) { return esc(t); }).join('<br>') + '</td></tr>';
   });
   rows.push('<tr class="tot" style="height:30px"><td class="a">TOTAL</td><td>' + fmtInt(T.dialed) + '</td><td>' + fmtInt(T.conn) +
@@ -138,8 +146,8 @@ function shotFull(md) {
   var score = '<h2>1. Agent Scorecard</h2>' + gridTable(cols, rows);
 
   // Hourly trend: calls over minutes on call; red = extreme decline.
-  var hl = shortHours();
-  var hcols = [['Agent', 96]].concat(hl.map(function (h) { return [h, 0]; })).concat([['Trend', 104], ['Direction', 176]]);
+  var hl = hourLabels();
+  var hcols = [['Agent', 104]].concat(hl.map(function (h) { return [h, 0]; })).concat([['Trend', 96], ['Direction', 176]]);
   var hrows = md.active.concat(['TOTAL']).map(function (a, i) {
     var m = a === 'TOTAL' ? T : md.combined[a], tr = hourlyTrend(m);
     var cells = m.hCalls.map(function (c, h) {
@@ -148,17 +156,18 @@ function shotFull(md) {
       return '<td style="' + (red ? 'color:' + col + ';font-weight:bold' : '') + '">' + c +
         '<div class="s"' + (red ? ' style="color:' + col + ';font-weight:bold"' : '') + '>' + Math.round(m.hDurSec[h] / 60) + ' min</div></td>';
     }).join('');
-    return '<tr class="' + (a === 'TOTAL' ? 'tot' : i % 2 ? 'band' : '') + '" style="height:44px"><td class="a">' + esc(a) + '</td>' +
+    return '<tr class="' + (a === 'TOTAL' ? 'tot' : i % 2 ? 'band' : '') + '" style="height:50px"><td class="a">' + esc(a) + '</td>' +
       cells + '<td>' + trendBars(m, tr.red) + '</td>' +
-      '<td style="color:' + tr.color + ';font-weight:bold;font-size:12px">' + esc(tr.label) + '</td></tr>';
+      '<td style="color:' + tr.color + ';font-weight:bold;font-size:13.5px">' + esc(tr.label) + '</td></tr>';
   });
   var hourly = '<h2>2. Hourly Call Trend — calls per hour (minutes on call)</h2>' + gridTable(hcols, hrows);
 
   var foot = '<div class="foot">Durations in minutes · Red bars/hours = extreme decline (below ' + CONFIG.DECLINE_PCT +
     '% of the agent\'s peak, after the peak) · Direction compares 1st vs 2nd half of the shift and the last hour (breaks excluded) · ' +
     'Pink notes = idle &gt; ' + CONFIG.GAP_MIN + ' min, no calls and no tracker</div>';
-  var h = 32 + 50 + 30 + 76 + (36 + 38 + rowsH + 30 + 30 * md.absent.length) + (36 + 38 + 44 * (md.active.length + 1)) + 56 + 24;
-  return {name: 'Full', keepPdf: true, w: W, h: h, html: head + score + hourly + foot};
+  var h = 32 + 50 + 30 + 76 + (36 + 40 + rowsH + 34 + 34 * md.absent.length) + (36 + 40 + 50 * (md.active.length + 1)) + 60 + 24;
+  // Full is capped at 1024 px wide by Drive, so its text is set larger (class "fx") to stay readable.
+  return {name: 'Full', keepPdf: true, w: W, h: h, html: '<div class="fx">' + head + score + hourly + foot + '</div>'};
 }
 
 // ---------- Mobile ----------
@@ -315,14 +324,6 @@ function shortStatus(s) {
     .replace('logging', 'log').replace('inactivity', 'idle');
 }
 
-function shortHours() {
-  var out = [];
-  for (var i = 0; i < CONFIG.HOUR_COUNT; i++) {
-    var h = (CONFIG.HOUR_START / 60 + i) % 24;
-    out.push((h % 12 || 12) + (h < 12 ? 'A' : 'P'));
-  }
-  return out;
-}
 
 function logPctOf(m) { return m.isTracker && m.trkUniq ? Math.round(m.matched / m.trkUniq * 100) + '%' : '–'; }
 
