@@ -19,6 +19,12 @@ This version uses no external API: the sheet is all formulas, and research is do
 
 Restaurant name (Leads column B) is the key that Calls and Research look up, so names must be unique.
 
+## Chat
+
+The sheet is the database; Claude is the chat front end. Paste lead details, ask for a lead, or ask for
+changes in plain words. Set it up as a Claude Project with [claude-project-instructions.md](claude-project-instructions.md)
+and the Google Sheets connector.
+
 ## Research
 
 Research checks Google review replies, Google categories, competitors within 1 mile, Instagram and Facebook activity, and online ordering and delivery.
