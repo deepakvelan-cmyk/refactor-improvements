@@ -73,7 +73,8 @@ function pdfPageCount(blob) {
 }
 
 var SHOT_CSS = [
-  '*{box-sizing:border-box}',
+  // The PDF converter prints like a browser and drops background colours unless told to keep them.
+  '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}',
   'body{margin:0;padding:16px;background:#ffffff;color:' + SHOT_COLORS.text + ';font-family:Arial,Helvetica,sans-serif;font-size:13px}',
   'table{border-collapse:collapse}',
   '.hd{width:100%;background:' + STYLE.title + ';color:#ffffff}',
