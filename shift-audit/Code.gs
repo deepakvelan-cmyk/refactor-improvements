@@ -11,12 +11,10 @@
  *   Run latest shift             – current / most recent night shift
  *   Run for date range…          – e.g. 13/10/2026 or 01/10/2026-13/10/2026
  *   Auto-refresh ON / OFF        – re-runs the Controls report every 15 minutes
- *   Schedule ON / OFF            – latest shift at 11 PM, 1, 3, 7 AM IST (no Sunday-night shift) and a
- *                                  Full + Mobile screenshots (PNG + PDF) of the Report tab into the project folder
- *   Take screenshot now          – Full + Mobile screenshots of the Report tab as it is now
-
-
-
+ *   Schedule ON / OFF            – latest shift at 11 PM, 1, 3, 7 AM IST (no Sunday-night shift) + screenshots
+ *                                  into the project folder (see Screenshots.gs): Full (PNG + PDF), Mobile (PNG),
+ *                                  Idle Time & Call Gaps (PNG)
+ *   Take screenshot now          – re-runs the Controls report and saves the same three screenshots
  *   Rebuild screenshot list      – re-lists every screenshot in the month folders on the Screenshots tab
  * All runs share one script lock, so scheduled runs, auto-refresh and manual runs never overlap.
  */
@@ -56,6 +54,9 @@ var CONFIG = {
   BURST_NO_CONNECT: 5,      // this many consecutive dials with no connect is flagged
   REPEAT_DIAL_FLAG: 5,      // repeat dials at or above this are highlighted
   LOW_CONNECT_PCT: 50,      // connect rate below this (with 10+ dials) is flagged
+  TRACKER_GAP_NOTE_MIN: 60, // a gap with tracker updates this long is still mentioned in the notes
+  DECLINE_PCT: 40,          // an hour below this % of the agent's peak rate (after the peak) is an extreme decline
+  HALF_CHANGE_PCT: 20,      // 2nd half vs 1st half change (calls per working hour) that counts as a drop / rise
   MAX_DAYS: 31,
   REFRESH_MINUTES: 15,
   // Scheduled runs (IST) + screenshots into <project folder>/<SCREENSHOT_FOLDER>/<yyyy-MM>/.
@@ -97,11 +98,14 @@ function hideRecordTabs() {
 
 function runLatestShift() { var k = latestShiftKey(); runAudit(k, k); }
 
-function runFromControls() {
+function runFromControls() { var k = controlsRange(); runAudit(k[0], k[1]); }
+
+// [from, to] shift keys from the Controls tab (blank = latest shift).
+function controlsRange() {
   var c = controls();
   var from = parseKey(c.getRange('B1').getDisplayValue()), to = parseKey(c.getRange('B2').getDisplayValue());
-  if (!from) { var k = latestShiftKey(); runAudit(k, k); return; }
-  runAudit(from, to || from);
+  if (!from) { var k = latestShiftKey(); return [k, k]; }
+  return [from, to || from];
 }
 
 function runForRange() {
@@ -151,52 +155,18 @@ function scheduleOff() {
 function scheduledRun() {
   var k = latestShiftKey();
   if (CONFIG.SKIP_SHIFT_WEEKDAYS.indexOf(new Date(k + 'T00:00:00Z').getUTCDay()) >= 0) return;
-  runAudit(k, k, {screenshot: true});
+  runAudit(k, k, {screenshot: 'Scheduled'});
 }
 
-// Menu / button: screenshots of the Report tab exactly as it is now.
+// Menu / button: re-runs the Controls report, then saves the screenshots from that run.
 function takeScreenshotNow() {
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(120000)) { toast('Another run is in progress — try again in a minute'); return; }
-  try { SpreadsheetApp.flush(); screenshotReport('Manual'); } finally { lock.releaseLock(); }
-  toast('Screenshots saved to Drive — listed on the Screenshots tab');
+  var k = controlsRange();
+  if (runAudit(k[0], k[1], {screenshot: 'Manual'})) toast('Screenshots saved to Drive — listed on the Screenshots tab');
 }
 
 var SHOT_HEAD = ['Date (IST)', 'Time (IST)', 'Shift Date', 'Type', 'Calls Dialed', 'Connected', 'Tracker Entries', 'Logging %',
-                 'Inactive > ' + CONFIG.GAP_MIN + ' min', 'Absent', 'Full — Image', 'Full — PDF', 'Mobile — Image', 'Mobile — PDF',
+                 'Inactive > ' + CONFIG.GAP_MIN + ' min', 'Absent', 'Full — Image', 'Full — PDF', 'Mobile — Image', 'Idle — Image',
                  'Month Folder'];
-// Full = landscape, whole report on one page; Mobile = portrait, whole report on one tall page (phone-friendly).
-var SHOT_VERSIONS = [['Full', 'portrait=false&size=A4&scale=4'], ['Mobile', 'portrait=true&size=A4&scale=4']];
-
-// Saves Full + Mobile screenshots (PNG image + PDF) of the Report tab into
-// <project folder>/<SCREENSHOT_FOLDER>/<yyyy-MM>/ and lists them at the top of the Screenshots tab.
-function screenshotReport(kind) {
-  var ss = SpreadsheetApp.getActive();
-  var rep = ss.getSheetByName('Report');
-  if (!rep) return;
-  var now = new Date();
-  var month = monthFolder(now);
-  var stamp = Utilities.formatDate(now, 'Asia/Kolkata', 'yyyy-MM-dd HH-mm-ss') + ' IST';
-  var kpi = rep.getRange(5, 1, 1, 9).getDisplayValues()[0];
-  var info = {taken: now.getTime(), shift: rep.getRange(1, 1).getDisplayValue().replace(/^.*— /, ''), kind: kind,
-              kpi: [kpi[0], kpi[1], kpi[4], kpi[5], kpi[7], kpi[8]]};
-  var links = {};
-  SHOT_VERSIONS.forEach(function (v) {
-    var url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=pdf&gid=' + rep.getSheetId() + '&' + v[1] +
-              '&gridlines=false&printtitle=false&sheetnames=false&pagenum=UNDEFINED&fzr=false&horizontal_alignment=CENTER' +
-              '&top_margin=0.25&bottom_margin=0.25&left_margin=0.25&right_margin=0.25';
-    var pdf = UrlFetchApp.fetch(url, {headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken()}}).getBlob()
-      .setName(stamp + ' · ' + v[0] + '.pdf');
-    var pdfFile = month.createFile(pdf).setDescription(JSON.stringify(info));
-    links[v[0] + 'Pdf'] = pdfFile.getUrl();
-    var png = pdfToPng(pdfFile.getId());
-    if (png) links[v[0] + 'Img'] = month.createFile(png.setName(stamp + ' · ' + v[0] + '.png')).setDescription(JSON.stringify(info)).getUrl();
-  });
-  var sh = screenshotsSheet();
-  sh.insertRowAfter(1);
-  writeShotRows(sh, 2, [shotRow(info, links, month.getUrl(), month.getName())]);
-}
-
 function monthFolder(now) {
   var root = childFolder(DriveApp.getFolderById(CONFIG.PROJECT_FOLDER_ID), CONFIG.SCREENSHOT_FOLDER);
   return childFolder(root, Utilities.formatDate(now, 'Asia/Kolkata', 'yyyy-MM'));
@@ -215,7 +185,7 @@ function pdfToPng(fileId) {
     var r = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?fields=thumbnailLink', auth);
     var link = r.getResponseCode() === 200 && JSON.parse(r.getContentText()).thumbnailLink;
     if (!link) continue;
-    var img = UrlFetchApp.fetch(link.replace(/=s\d+$/, '=s2400'), auth);
+    var img = UrlFetchApp.fetch(link.replace(/=s\d+$/, '=s3200'), auth);
     if (img.getResponseCode() === 200) return img.getBlob().setContentType('image/png');
   }
   return null;   // the PDF is still saved and linked
@@ -225,7 +195,7 @@ function pdfToPng(fileId) {
 function screenshotsSheet() {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName('Screenshots');
-  if (sh) return sh;
+  if (sh) { sh.getRange(1, 1, 1, SHOT_HEAD.length).setValues([SHOT_HEAD]); return sh; }
   var rep = ss.getSheetByName('Report');
   sh = ss.insertSheet('Screenshots', rep ? rep.getIndex() : ss.getNumSheets());
   sh.getRange(1, 1, 1, SHOT_HEAD.length).setValues([SHOT_HEAD]).setFontWeight('bold')
@@ -242,7 +212,8 @@ function shotRow(info, links, folderUrl, folderName) {
   return [Utilities.formatDate(t, 'Asia/Kolkata', 'dd MMM yyyy'), Utilities.formatDate(t, 'Asia/Kolkata', 'h:mm:ss a'),
           info.shift || '', info.kind || '–'].concat(info.kpi || ['', '', '', '', '', '']).concat([
           link(links.FullImg, 'View / download'), link(links.FullPdf, 'View / download'),
-          link(links.MobileImg, 'View / download'), link(links.MobilePdf, 'View / download'), link(folderUrl, folderName)]);
+          link(links.MobileImg || links.MobilePdf, 'View / download'), link(links.IdleImg || links.IdlePdf, 'View / download'),
+          link(folderUrl, folderName)]);
 }
 
 function writeShotRows(sh, r, rows) {
@@ -263,7 +234,7 @@ function rebuildScreenshotList() {
     while (months.hasNext()) {
       var mf = months.next(), files = mf.getFiles();
       while (files.hasNext()) {
-        var f = files.next(), m = f.getName().match(/^(.+ IST) · (Full|Mobile)\.(png|pdf)$/i);
+        var f = files.next(), m = f.getName().match(/^(.+ IST) · (Full|Mobile|Idle)\.(png|pdf)$/i);
         if (!m) continue;
         var s = shots[m[1]] || (shots[m[1]] = {links: {}, folderUrl: mf.getUrl(), folderName: mf.getName()});
         s.links[m[2] + (m[3].toLowerCase() === 'png' ? 'Img' : 'Pdf')] = f.getUrl();
@@ -282,10 +253,12 @@ function rebuildScreenshotList() {
 }
 
 // ---------- Core ----------
+// Returns false when another run held the lock and this one was skipped.
 function runAudit(fromKey, toKey, opts) {
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(300000)) { toast('Another run is in progress — skipped'); return; }
+  if (!lock.tryLock(300000)) { toast('Another run is in progress — skipped'); return false; }
   try { runAuditLocked(fromKey, toKey, opts || {}); } finally { lock.releaseLock(); }
+  return true;
 }
 
 function runAuditLocked(fromKey, toKey, opts) {
@@ -339,7 +312,7 @@ function runAuditLocked(fromKey, toKey, opts) {
   writeUnmapped(unmapped, trk, fromKey, toKey, now);
   SpreadsheetApp.flush();
   hideRecordTabs();
-  if (opts.screenshot) screenshotReport('Scheduled');
+  if (opts.screenshot) screenshotReport(opts.screenshot, shotModel(agents, combined, fromKey, toKey, now));
   toast('Done — ' + keys.length + ' shift(s)');
 }
 
@@ -513,17 +486,20 @@ function analyseShift(key, calls, trk, now) {
     m.noConnRepeat = noConn.length;
     noConn.forEach(function (num) { exc.push([a, 'Redialed, never connected', num, 'Dialed x' + x.nums[num] + ', 0 connects']); });
 
-    // Observations for the Report "Notes" column.
-    if (m.extra) note(pl(m.extra, 'repeat dial') + ' (' + pl(m.repeats, 'number') + ' redialed)');
-    if (noConn.length) note(pl(noConn.length, 'number') + ' redialed with no connect: ' +
-      noConn.slice(0, 3).map(function (num) { return num + ' ×' + x.nums[num]; }).join(', ') + (noConn.length > 3 ? '…' : ''));
-    if (best.n >= CONFIG.BURST_NO_CONNECT)
-      note(best.n + ' dials in a row with no connect (' + fmtT(best.from) + '–' + fmtT(best.to) + ')');
+    // Observations for the "Notes" column (Report tab and screenshots).
+    // One redialed number is named; with several, only those dialed 3+ times are named.
+    var numX = function (num) { return num + ' ×' + x.nums[num]; };
+    var many = noConn.filter(function (num) { return x.nums[num] >= 3; });
+    if (m.extra) note(pl(m.extra, 'repeat dial') + ' (' + pl(m.repeats, 'number') + ')');
+    if (noConn.length) note(noConn.length + ' redialed, never connected' + (noConn.length === 1 ? ': ' + numX(noConn[0])
+      : many.length ? ' (' + many.slice(0, 2).map(numX).join(', ') + (many.length > 2 ? '…' : '') + ')' : ''));
+    if (best.n >= CONFIG.BURST_NO_CONNECT) note(best.n + ' dials in a row, no connect ' + fmtSpan(best.from, best.to));
     if (m.dialed >= 10 && m.conn / m.dialed * 100 < CONFIG.LOW_CONNECT_PCT)
-      note('Low connect rate ' + Math.round(m.conn / m.dialed * 100) + '% (' + m.conn + '/' + m.dialed + ')');
-    if (m.longest)
-      note(pl(m.longCalls, 'long call') + ' ≥ ' + CONFIG.LONG_CALL_MIN + ' min; longest ' + fmtDur(m.longest.sec) + ' min talk ' +
-           fmtT(m.longest.time) + '–' + fmtT(m.longest.end) + ' (genuinely on call)');
+      note('Low connect ' + Math.round(m.conn / m.dialed * 100) + '% (' + m.conn + '/' + m.dialed + ')');
+    if (m.longest) {
+      var longSpan = fmtDur(m.longest.sec) + ' min ' + fmtSpan(m.longest.time, m.longest.end);
+      note(m.longCalls === 1 ? 'Long call ' + longSpan + ' (on call)' : m.longCalls + ' long calls, longest ' + longSpan);
+    }
 
     var logged = {};
     T.entries.forEach(function (e) {
@@ -545,7 +521,7 @@ function analyseShift(key, calls, trk, now) {
       exc.push([a, x.numConn[num] ? 'Connected, not logged' : 'Dialed, not logged', num,
                 others.length ? 'Logged in tracker of: ' + others.join(', ') : '']);
     });
-    if (m.connNotLogged) note(pl(m.connNotLogged, 'connected call') + ' not logged in tracker');
+    if (m.connNotLogged) note(pl(m.connNotLogged, 'connected call') + ' not logged');
     var seen = {};
     T.entries.forEach(function (e) {
       if (!e.phones.length) { m.noPhone++; exc.push([a, 'Entry without phone', e.lead, e.tab + ' r' + e.row + ' ' + e.name + ' @ ' + fmt(e.time)]); }
@@ -564,6 +540,8 @@ function analyseShift(key, calls, trk, now) {
 
     // Gaps between calls inside each work slot, and whether the tracker was being updated meanwhile.
     // Dialer-only agents get their gaps listed without the tracker check.
+    // Each gap is kept in m.gapList (kind idle / trk / dialer) for the notes and the Idle screenshot.
+    var lastSlot = CONFIG.SLOTS.length - 1;
     if (a !== 'Unmapped' && (m.dialed || m.entries)) {
       var acts = x.out.concat(x.inc).map(function (c) { return {from: c.time, to: new Date(c.time.getTime() + c.dur * 1000)}; })
         .sort(function (p, q) { return p.from - q.from; });
@@ -575,22 +553,26 @@ function analyseShift(key, calls, trk, now) {
         var check = function (to) {
           var mins = (to - cursor) / 60000;
           if (mins > CONFIG.GAP_MIN) {
-            var span = Math.round(mins) + ' min ' + fmtT(cursor) + '–' + fmtT(to);
+            var g = {d: key, from: cursor, to: to, mins: Math.round(mins), entries: 0,
+                     lateStart: si === 0 && cursor.getTime() === sStart.getTime(),
+                     atEnd: si === lastSlot && to.getTime() === keyInstant(key, s[2]).getTime()};
+            m.gapList.push(g);
             m.gaps++;
-            m.maxGap = Math.max(m.maxGap, Math.round(mins));
+            m.maxGap = Math.max(m.maxGap, g.mins);
             if (!m.isTracker) {
-              note('⚠ No calls for ' + span + ' (dialer only, tracker not checked)');
+              g.kind = 'dialer';
               gapRows.push([a, s[0], fmt(cursor), fmt(to), Math.round(mins), 'n/a', '', 'Call gap (dialer only — tracker not checked)']);
               return;
             }
             var inGap = T.entries.filter(function (e) { return e.time >= cursor && e.time <= to; });
+            g.entries = inGap.length;
             if (inGap.length) {
+              g.kind = 'trk';
               m.gapsWithAct++;
-              note('No calls for ' + span + ' but tracker updated (' + inGap.length + ' entr' + (inGap.length > 1 ? 'ies' : 'y') + ')');
             } else {
+              g.kind = 'idle';
               m.gapsNoAct++;
               m.idleMin += Math.round(mins);
-              note('⚠ Inactive ' + span + ' — no calls, no tracker activity');
             }
             gapRows.push([a, s[0], fmt(cursor), fmt(to), Math.round(mins), inGap.length,
                           inGap.slice(0, 5).map(function (e) { return e.name || e.lead; }).join('; '),
@@ -604,6 +586,7 @@ function analyseShift(key, calls, trk, now) {
         });
         if (sEnd > cursor) check(sEnd);
       });
+      gapNotes(m.gapList).forEach(note);
     }
     metrics[a] = m;
   });
@@ -615,11 +598,28 @@ function analyseShift(key, calls, trk, now) {
   return {key: key, metrics: metrics, exceptions: exc, gaps: gapRows};
 }
 
+// Notes for one shift's gaps: idle gaps (no calls, no tracker), dialer-only gaps, and long gaps with tracker updates.
+function gapNotes(list) {
+  var out = [], of = function (k) { return list.filter(function (g) { return g.kind === k; }); };
+  var idle = of('idle'), dial = of('dialer').sort(function (p, q) { return q.mins - p.mins; });
+  if (idle.length) out.push('⚠ Idle ' + joinAnd(idle.map(function (g) {
+    return g.mins + ' min ' + fmtSpan(g.from, g.to) + (g.lateStart ? ' (late start)' : '');
+  })));
+  if (dial.length) out.push('⚠ No calls ' + dial[0].mins + ' min ' + fmtSpan(dial[0].from, dial[0].to) + (dial.length > 1
+    ? ' (+ ' + dial.slice(1).map(function (g) { return g.mins + ' min'; }).join(', ') + ' gap' + (dial.length > 2 ? 's' : '') + ')' : ''));
+  of('trk').forEach(function (g) {
+    if (g.mins < CONFIG.TRACKER_GAP_NOTE_MIN) return;
+    out.push('No calls ' + g.mins + ' min ' + (g.atEnd ? 'after ' + fmtT(g.from) : fmtSpan(g.from, g.to)) +
+             ' but ' + g.entries + ' tracker entr' + (g.entries === 1 ? 'y' : 'ies'));
+  });
+  return out;
+}
+
 function newMetric() {
   var z = function () { return CONFIG.SLOTS.map(function () { return 0; }); };
   var zh = function () { var a = []; for (var i = 0; i < CONFIG.HOUR_COUNT; i++) a.push(0); return a; };
   return {durSec: 0, hCalls: zh(), hConn: zh(), hDurSec: zh(), hWork: zh(), longCalls: 0, longest: null,
-          noConnRepeat: 0, notes: [],
+          noConnRepeat: 0, notes: [], gapList: [],
           dialed: 0, conn: 0, conn15: 0, talkSec: 0, uniq: 0, trkUniq: 0, repeats: 0, extra: 0, incoming: 0, missed: 0,
           firstCall: null, lastCall: null, breakCalls: 0,
           entries: 0, tabs: {}, firstEntry: null, lastEntry: null, breakEntries: 0, noPhone: 0,
@@ -635,7 +635,7 @@ function combine(list, allTimeLatest) {
     Object.keys(m).forEach(function (k) {
       var v = m[k];
       if (k === 'sHours' || k === 'hWork') { r[k] = allTimeLatest ? r[k].map(function (h, i) { return h + v[i]; }) : v.slice(); }
-      else if (k === 'notes') r.notes = r.notes.concat(v);
+      else if (k === 'notes' || k === 'gapList') r[k] = r[k].concat(v);
       else if (k === 'longest') { if (v && (!r.longest || v.sec > r.longest.sec)) r.longest = v; }
       else if (Array.isArray(v)) r[k] = r[k].map(function (x, i) { return x + v[i]; });
       else if (k === 'tabs') Object.keys(v).forEach(function (t) { r.tabs[t] = (r.tabs[t] || 0) + v[t]; });
@@ -752,18 +752,26 @@ function activityStatus(a, m, live) {
 }
 
 // Hourly direction from calls per working hour (breaks excluded), ignoring hours with < 20 working minutes so far.
+// red[i] = extreme decline: below DECLINE_PCT of the agent's peak rate, in an hour after the peak.
+// Direction compares the average rate of the 1st and 2nd half of the hours, and whether the last hour is red.
 function hourlyTrend(m) {
-  var pts = [];
-  for (var i = 0; i < CONFIG.HOUR_COUNT; i++) if (m.hWork[i] >= 20) pts.push({x: i, y: m.hCalls[i] / m.hWork[i] * 60});
-  if (pts.length < 2 || !m.dialed) return {label: pts.length ? 'Too early' : '', color: '#777777'};
-  var n = pts.length, sx = 0, sy = 0, sxy = 0, sxx = 0, peak = 0;
-  pts.forEach(function (p) { sx += p.x; sy += p.y; sxy += p.x * p.y; sxx += p.x * p.x; peak = Math.max(peak, p.y); });
-  var mean = sy / n, slope = (n * sxy - sx * sy) / (n * sxx - sx * sx || 1), rel = mean ? slope / mean : 0;
-  var last = pts[n - 1].y;
-  if (peak && last < peak * 0.5) return {label: 'Sharp drop ↓↓ (last hr ' + Math.round(last) + '/hr vs peak ' + Math.round(peak) + ')', color: STYLE.red};
-  if (rel > 0.08) return {label: 'Rising ↑', color: STYLE.green};
-  if (rel < -0.08) return {label: 'Slowing ↓', color: STYLE.amber};
-  return {label: 'Steady →', color: STYLE.blue};
+  var red = m.hCalls.map(function () { return false; }), pts = [];
+  for (var i = 0; i < CONFIG.HOUR_COUNT; i++) if (m.hWork[i] >= 20) pts.push({i: i, y: m.hCalls[i] / m.hWork[i] * 60});
+  if (pts.length < 4 || !m.dialed) return {label: pts.length && m.dialed ? 'Too early' : '', color: '#777777', red: red};
+  var top = 0;
+  pts.forEach(function (p, k) { if (p.y > pts[top].y) top = k; });
+  pts.forEach(function (p, k) { if (k > top && p.y < pts[top].y * CONFIG.DECLINE_PCT / 100) red[p.i] = true; });
+  var avg = function (list) { return list.reduce(function (s, p) { return s + p.y; }, 0) / list.length; };
+  var half = Math.ceil(pts.length / 2), a1 = avg(pts.slice(0, half)), a2 = avg(pts.slice(half));
+  var chg = a1 ? Math.round((a2 - a1) / a1 * 100) : 0, sign = (chg > 0 ? '+' : '') + chg + '%';
+  var last = pts[pts.length - 1], endDrop = red[last.i], lim = CONFIG.HALF_CHANGE_PCT;
+  var out = chg <= -lim && endDrop ? {label: 'Drop in 2nd half & at end ↓↓ (' + sign + ')', color: STYLE.red}
+    : endDrop ? {label: 'Drop at end of shift ↓ (' + hourLabel(CONFIG.HOUR_START / 60 + last.i) + ')', color: STYLE.red}
+    : chg <= -lim ? {label: 'Slower 2nd half ↓ (' + sign + ')', color: STYLE.amber}
+    : chg >= lim ? {label: 'Rising ↑ (' + sign + ')', color: STYLE.green}
+    : {label: 'Steady →', color: STYLE.blue};
+  out.red = red;
+  return out;
 }
 
 function hourLabels() {
@@ -848,7 +856,7 @@ function writePresentable(agents, combined, fromKey, toKey, now) {
       .concat(['', hourlyTrend(m).label]);
   });
   rows2.push(['TOTAL'].concat(T.hCalls.map(function (c, i) { return T.hWork[i] ? c + ' (' + Math.round(T.hDurSec[i] / 60) + ' min)' : ''; }))
-    .concat(['', '']));
+    .concat(['', hourlyTrend(T).label]));
   var top2 = r;
   r = presentTable(sh, r, '2. Hourly Call Trend — calls (minutes on call) per hour; breaks 11:00–11:20 PM, 1:00–1:30 AM, 3:00–3:20 AM',
                    head2, rows2, {});
@@ -857,7 +865,11 @@ function writePresentable(agents, combined, fromKey, toKey, now) {
     for (var h = 0; h < CONFIG.HOUR_COUNT; h++) if (m.hWork[h]) vals.push(m.hCalls[h]);
     if (vals.length) sh.getRange(top2 + 2 + i, CONFIG.HOUR_COUNT + 2)
       .setFormula('=SPARKLINE({' + vals.join(',') + '},{"charttype","column";"color","' + STYLE.header + '"})');
-    if (a !== 'TOTAL') sh.getRange(top2 + 2 + i, CONFIG.HOUR_COUNT + 3).setFontColor(hourlyTrend(m).color).setFontWeight('bold');
+    var tr = hourlyTrend(m);
+    sh.getRange(top2 + 2 + i, CONFIG.HOUR_COUNT + 3).setFontColor(tr.color).setFontWeight('bold');
+    tr.red.forEach(function (isRed, h) {
+      if (isRed) sh.getRange(top2 + 2 + i, h + 2).setFontColor(STYLE.red).setFontWeight('bold');
+    });
   });
 
   // 3. Idle time & gaps
@@ -880,7 +892,8 @@ function writePresentable(agents, combined, fromKey, toKey, now) {
 
   sh.getRange(r, 1, 1, W).merge().setValue(
     'Key:  On-call (min) = dialing + ringing + talking (line busy)  •  Talk (min) = connected conversation  •  All durations in minutes  •  Repeat Dials = extra dials to numbers already called  •  ' +
-    'Green OK  •  Orange Check  •  Red = low logging / sharp drop / inactive  •  Blue = dialer only  •  Grey = absent  •  ' +
+    'Green OK  •  Orange Check  •  Red = low logging / extreme decline (below ' + CONFIG.DECLINE_PCT + '% of the agent\'s peak, after the peak) / inactive  •  ' +
+    'Blue = dialer only  •  Grey = absent  •  ' +
     'Pink notes = inactive > ' + CONFIG.GAP_MIN + ' min with no calls and no tracker activity')
     .setFontColor('#555555').setFontStyle('italic').setWrap(true);
   sh.setRowHeight(r, 44);
@@ -1149,4 +1162,10 @@ function fmtDur(sec) {
   return String(Math.round((sec || 0) / 60)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 function fmtT(d) { return d ? Utilities.formatDate(d, 'Asia/Kolkata', 'h:mm a') : ''; }
+// "10:06–10:26 PM", or "11:37 PM–12:01 AM" when the range crosses AM / PM.
+function fmtSpan(a, b) {
+  var x = fmtT(a), y = fmtT(b);
+  return x.slice(-2) === y.slice(-2) ? x.slice(0, -3) + '–' + y : x + '–' + y;
+}
+function joinAnd(list) { return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1]; }
 function hourLabel(h) { h = ((h % 24) + 24) % 24; return (h % 12 || 12) + (h < 12 ? ' AM' : ' PM'); }
